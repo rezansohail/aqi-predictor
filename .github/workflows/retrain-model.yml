@@ -1,23 +1,30 @@
 name: Retrain AQI Model Daily
-'on':
+
+on:
   schedule:
-    - cron: 0 0 * * *
-  workflow_dispatch: null
+    - cron: "0 0 * * *"   #runs every day at midnight UTC
+  workflow_dispatch:
+
 jobs:
   retrain-model:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+
       - name: Install dependencies
         run: |
+          pip install --upgrade pip
           pip install hopsworks==4.2.* "hopsworks[python]" scikit-learn pandas numpy matplotlib shap
-      - name: Run model training script
+
+      - name: Retrain Model and Register
         env:
-          HOPSWORKS_API_KEY: '${{ secrets.HOPSWORKS_API_KEY }}'
+          HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
         run: |
           python scripts/train-model.py
