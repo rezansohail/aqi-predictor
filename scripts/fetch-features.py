@@ -51,9 +51,10 @@ df = df.ffill().bfill()   #handling missing values
 
 fg = fs.get_or_create_feature_group(
     name="karachi_aqi_pollution_history",
-    version=1,
+    version=3,
     description="Hourly Karachi AQI and weather data",
-    primary_key=["datetime"],
+    primary_key=["timestamp_utc"],
+    event_time="timestamp_utc",
     online_enabled=True
 )
 
