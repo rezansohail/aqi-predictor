@@ -15,9 +15,9 @@ jobs:
           python-version: '3.10'
       - name: Install dependencies
         run: |
-          pip install hopsworks scikit-learn pandas numpy matplotlib shap
+          pip install hopsworks==4.2.* "hopsworks[python]" scikit-learn pandas numpy matplotlib shap
       - name: Run model training script
         env:
           HOPSWORKS_API_KEY: '${{ secrets.HOPSWORKS_API_KEY }}'
         run: |
-          python scripts/train_model.py
+          python scripts/train-model.py
