@@ -41,9 +41,10 @@ df_weather = pd.DataFrame(weather_data["hourly"])
 df_weather["timestamp_utc"] = pd.to_datetime(df_weather["time"])
 df_weather.drop(columns=["time"], inplace=True)
 
-# Merge data
+# Merge both datasets
 df = pd.merge(df_aqi, df_weather, on="timestamp_utc", how="inner")
 
+# Rename to match schema
 df = df.rename(columns={
     "carbon_monoxide": "co",
     "nitrogen_dioxide": "no2",
@@ -59,19 +60,29 @@ df = df.rename(columns={
 
 # Derived & time-based features
 df["aqi_index"] = df[["pm2_5", "pm10", "no2", "so2", "o3", "co"]].mean(axis=1)
-df["hour"] = df["timestamp_utc"].dt.hour.astype(int)
-df["day"] = df["timestamp_utc"].dt.day.astype(int)
-df["month"] = df["timestamp_utc"].dt.month.astype(int)
-df["dayofweek"] = df["timestamp_utc"].dt.dayofweek.astype(int)
+df["hour"] = df["timestamp_utc"].dt.hour.astype("int64")
+df["day"] = df["timestamp_utc"].dt.day.astype("int64")
+df["month"] = df["timestamp_utc"].dt.month.astype("int64")
+df["dayofweek"] = df["timestamp_utc"].dt.dayofweek.astype("int64")
 df["aqi_change_rate"] = df["aqi_index"].diff().fillna(0)
 df["next_day_aqi"] = df["aqi_index"].shift(-24).bfill()
 
+# Fix numeric data types
+numeric_cols = [
+    "aqi_index", "co", "no2", "o3", "so2", "pm2_5", "pm10",
+    "temp_c", "humidity", "pressure_hpa", "wind_speed",
+    "aqi_change_rate", "next_day_aqi"
+]
+df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors="coerce")
+
+# Final schema match
 df = df[[
     "timestamp_utc", "aqi_index", "co", "no2", "o3", "so2", "pm2_5", "pm10",
     "temp_c", "humidity", "pressure_hpa", "wind_speed",
     "hour", "day", "month", "dayofweek", "aqi_change_rate", "next_day_aqi"
 ]]
 
+# Connect to Hopsworks
 api_key = os.environ["HOPSWORKS_API_KEY"]
 project_name = "AQI_Predictor_KARACHI"
 
