@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install hopsworks==4.2.* "hopsworks[python]" scikit-learn pandas numpy matplotlib shap
+          pip install hopsworks==4.2.* hopsworks[python] scikit-learn pandas numpy matplotlib shap joblib
 
       - name: Retrain Model and Register
         env:
