@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import os
+import requests
 import hopsworks
 import shap
 import matplotlib.pyplot as plt
@@ -97,7 +98,30 @@ for name, model in models.items():
 compare_df = pd.DataFrame(metrics).sort_values("MAE")
 best_model = compare_df.iloc[0]["Model"]
 
-# RANDOM FOREST ON TOP
+# REAL-TIME AQI
+st.divider()
+st.subheader("🌐 Latest Real-Time AQI")
+
+# Most recent row from Hopsworks Feature Store
+latest_row = df.iloc[-1]
+current_aqi = latest_row["aqi_index"]
+
+# Display as metric
+st.metric("Current AQI", f"{current_aqi:.2f}")
+
+cols = st.columns(3)
+with cols[0]:
+    st.metric("PM2.5", f"{latest_row['pm2_5']:.2f}")
+    st.metric("O₃", f"{latest_row['o3']:.2f}")
+with cols[1]:
+    st.metric("PM10", f"{latest_row['pm10']:.2f}")
+    st.metric("NO₂", f"{latest_row['no2']:.2f}")
+with cols[2]:
+    st.metric("SO₂", f"{latest_row['so2']:.2f}")
+    st.metric("CO", f"{latest_row['co']:.2f}")
+
+
+# RANDOM FOREST
 st.subheader("🌟 Random Forest — Hourly AQI Prediction (Next 3 Days)")
 rf_pred = predictions["Random Forest"]
 for day in range(3):
@@ -108,6 +132,23 @@ for day in range(3):
         .rename(columns={"timestamp":"Hour","predicted_aqi":"AQI"}),
         use_container_width=True
     )
+
+# AQI ALERT
+st.divider()
+st.subheader("🚨 Latest AQI Alert")
+
+if current_aqi > 249:
+    st.error(f"Hazardous AQI: {current_aqi:.2f}")
+elif current_aqi > 149:
+    st.error(f"Very Unhealthy AQI: {current_aqi:.2f}")
+elif current_aqi > 99:
+    st.warning(f"Unhealthy AQI: {current_aqi:.2f}")
+elif current_aqi > 49:
+    st.warning(f"Poor AQI: {current_aqi:.2f}")
+elif current_aqi > 19:
+    st.info(f"Fair AQI: {current_aqi:.2f}")
+else:
+    st.success(f"Excellent AQI: {current_aqi:.2f}")
 
 # MODEL PERFORMANCE
 st.divider()
