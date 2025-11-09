@@ -5,3 +5,5 @@ pandas
 numpy
 matplotlib
 scikit-learn
+shap
+python-dotenv
