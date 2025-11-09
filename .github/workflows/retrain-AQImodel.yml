@@ -27,4 +27,6 @@ jobs:
         env:
           HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
         run: |
-          python scripts/training-model.py
+          python scripts/training-linear.py
+          python scripts/training-rf.py
+          python scripts/training-gb.py
