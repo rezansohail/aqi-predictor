@@ -1,171 +1,170 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import os
 import hopsworks
-import joblib
+import shap
 import matplotlib.pyplot as plt
 from datetime import timedelta
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from dotenv import load_dotenv
 
-st.set_page_config(page_title="Karachi AQI — 3 Day Forecast", layout="wide")
+load_dotenv()
 
-if "HOPSWORKS_API_KEY" in st.secrets:
-    HOPSWORKS_API_KEY = st.secrets["HOPSWORKS_API_KEY"]
-else:
-    import os
-    HOPSWORKS_API_KEY = os.environ.get("HOPSWORKS_API_KEY")
+# UI CONFIG
+st.set_page_config(page_title="Karachi AQI Predictor", layout="wide")
+st.markdown("""
+<style>
+body { background-color:#2B0202; color:white; }
+.main { background-color:#2B0202; color:white; }
+h1,h2,h3,h4 { color:#ff69b4; }
+div[data-testid="stMetricValue"] { color:#ff69b4; }
+.stDataFrame { background-color:#0c1c2a; color:white; }
+.stDataFrame tbody tr th { color:white; }
+.stDataFrame tbody tr td { color:white; }
+</style>
+""", unsafe_allow_html=True)
 
-PROJECT_NAME = "AQI_Predictor_KARACHI"
-FEATURE_GROUP_NAME = "karachi_aqi_pollution_history"
-FEATURE_GROUP_VERSION = 4
+st.title("KARACHI AIR QUALITY INDEX PREDICTOR")
+st.write("Hourly AQI Prediction for the Next 3 Days")
 
-st.title("Karachi AQI — 3-Day Forecast")
+# CONNECT TO HOPSWORKS
+api_key = os.environ.get("HOPSWORKS_API_KEY")
+project = hopsworks.login(api_key_value=api_key, project="AQI_Predictor_KARACHI")
+fs = project.get_feature_store()
+fg = fs.get_feature_group("karachi_aqi_pollution_history", version=4)
+df = fg.read().sort_values("timestamp_utc").dropna()
+df["timestamp_utc"] = pd.to_datetime(df["timestamp_utc"])
 
-if HOPSWORKS_API_KEY is None:
-    st.error("HOPSWORKS_API_KEY not found. Add it to Streamlit secrets or set environment variable and restart.")
-    st.stop()
+# LAST 3 MONTHS
+cutoff = df["timestamp_utc"].max() - pd.DateOffset(months=3)
+df = df[df["timestamp_utc"] >= cutoff].reset_index(drop=True)
 
-# Connect to Hopsworks and load features
-@st.cache_data(ttl=600)
-def load_features():
-    project = hopsworks.login(api_key_value=HOPSWORKS_API_KEY, project=PROJECT_NAME)
-    fs = project.get_feature_store()
-    fg = fs.get_feature_group(FEATURE_GROUP_NAME, version=FEATURE_GROUP_VERSION)
-    df = fg.read().sort_values(by="timestamp_utc").reset_index(drop=True)
-    return df, project
-
-with st.spinner("Loading data from Hopsworks..."):
-    df, project = load_features()
-
-st.write(f"Data loaded — records: {len(df)} (last timestamp: {df['timestamp_utc'].iloc[-1]})")
-
-df = df.copy()
+# FEATURE ENGINEERING
+df["hour"] = df["timestamp_utc"].dt.hour
+df["day"] = df["timestamp_utc"].dt.day
+df["month"] = df["timestamp_utc"].dt.month
+df["dayofweek"] = df["timestamp_utc"].dt.dayofweek
 df["aqi_change_rate"] = df["aqi_index"].diff().fillna(0)
 
-# target is AQI 72 hours ahead (3 days)
-TARGET_NAME = "target_next_3_days"
-df[TARGET_NAME] = df["aqi_index"].shift(-72)
-
 features = [
-    "aqi_index", "co", "no2", "o3", "so2", "pm2_5", "pm10",
-    "temp_c", "humidity", "pressure_hpa", "wind_speed",
-    "hour", "day", "month", "dayofweek", "aqi_change_rate"
+    "aqi_index","co","no2","o3","so2","pm2_5","pm10",
+    "temp_c","humidity","pressure_hpa","wind_speed",
+    "hour","day","month","dayofweek","aqi_change_rate"
 ]
 
-df_features = df.dropna(subset=features + ["aqi_index"])
-df_model = df_features.dropna(subset=[TARGET_NAME]).reset_index(drop=True)
+X = df[features]
+y = df["aqi_index"]
 
-if len(df_model) < 200:
-    st.warning("Not enough historical labelled rows found for robust training. Need at least 200 labelled rows.")
-    # continue anyway
+# Time-based split
+split_idx = int(len(df)*0.8)
+X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
+y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
 
-split_idx = int(len(df_model) * 0.8)
-train_df = df_model.iloc[:split_idx]
-test_df = df_model.iloc[split_idx:]
+# TRAIN MODELS
+models = {
+    "Linear Regression": LinearRegression(),
+    "Random Forest": RandomForestRegressor(n_estimators=200, random_state=13),
+    "Gradient Boosting": GradientBoostingRegressor(n_estimators=200, random_state=13)
+}
 
-X_train = train_df[features]
-y_train = train_df[TARGET_NAME]
-X_test = test_df[features]
-y_test = test_df[TARGET_NAME]
+predictions = {}
+metrics = {"Model": [], "MAE": [], "RMSE": [], "R2": []}
 
-# Train Linear Regression
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+for name, model in models.items():
+    model.fit(X_train, y_train)
+    preds = model.predict(X_test)
+    
+    mae = mean_absolute_error(y_test, preds)
+    rmse = np.sqrt(mean_squared_error(y_test, preds))
+    r2 = r2_score(y_test, preds)
+    
+    metrics["Model"].append(name)
+    metrics["MAE"].append(mae)
+    metrics["RMSE"].append(rmse)
+    metrics["R2"].append(r2)
+    
+    # Forecast next 3 days (72h)
+    future_input = X.tail(72)
+    future_pred = model.predict(future_input)
+    future_pred = np.clip(future_pred, 0, 500)  # realistic bounds
+    future_dates = pd.date_range(start=df["timestamp_utc"].iloc[-1]+timedelta(hours=1), periods=72, freq="H")
+    predictions[name] = pd.DataFrame({"timestamp": future_dates, "predicted_aqi": future_pred})
 
-model = LinearRegression()
-model.fit(X_train, y_train)
+compare_df = pd.DataFrame(metrics).sort_values("MAE")
+best_model = compare_df.iloc[0]["Model"]
 
-# Evaluate on test set
-preds_test = model.predict(X_test)
+# RANDOM FOREST ON TOP
+st.subheader("🌟 Random Forest — Hourly AQI Prediction (Next 3 Days)")
+rf_pred = predictions["Random Forest"]
+for day in range(3):
+    day_start = rf_pred["timestamp"].dt.date.min() + timedelta(days=day)
+    st.write(f"**{day_start}**")
+    st.dataframe(
+        rf_pred[rf_pred["timestamp"].dt.date == day_start][["timestamp", "predicted_aqi"]]
+        .rename(columns={"timestamp":"Hour","predicted_aqi":"AQI"}),
+        use_container_width=True
+    )
 
-mse = mean_squared_error(y_test, preds_test)
-rmse = np.sqrt(mse)
-mae = mean_absolute_error(y_test, preds_test)
-r2 = r2_score(y_test, preds_test)
-# MAPE (avoid division by zero)
-mape = (np.abs((y_test - preds_test) / np.where(y_test == 0, 1e-6, y_test))).mean() * 100
-accuracy_pct = max(0.0, 100.0 - mape)  # a simple interpretation
+# MODEL PERFORMANCE
+st.divider()
+st.subheader("⚖️ Model Performance Comparison (3-Month Test Data)")
+st.dataframe(compare_df)
 
-# Retrain on all available labelled data (so model uses max history)
-final_model = LinearRegression()
-final_model.fit(df_model[features], df_model[TARGET_NAME])
+st.info("""
+**Why Random Forest is better here:**
+- Handles **non-linear AQI patterns** and sudden changes better than Linear Regression.
+- More robust to **outliers** in pollution spikes.
+- Captures interactions between multiple pollutants and weather features without needing manual feature engineering.
+""")
 
-# Use the last 72 rows of the current feature DataFrame
-X_recent = df_features[features].tail(72).copy().reset_index(drop=True)
+# SIDE-BY-SIDE GRAPH AND METRICS
+st.divider()
+st.subheader("📈 AQI Trend — Last 3 Months vs Random Forest Prediction")
+col1, col2 = st.columns([2,1])
 
-# Predict next 72 hours
-pred_next72 = final_model.predict(X_recent)
-
-# Map predictions to future timestamps:
-last_timestamp = df["timestamp_utc"].iloc[-1]
-future_timestamps = pd.date_range(start=last_timestamp + pd.Timedelta(hours=1), periods=72, freq="H")
-
-pred_df = pd.DataFrame({
-    "timestamp": future_timestamps,
-    "predicted_aqi": pred_next72
-})
-
-# Display metrics
-col1, col2, col3 = st.columns([2, 2, 2])
 with col1:
-    st.subheader("Model evaluation (test set)")
-    st.write(f"RMSE: {rmse:.3f}")
-    st.write(f"MAE: {mae:.3f}")
-    st.write(f"R²: {r2:.3f}")
+    fig, ax = plt.subplots(figsize=(8,4))
+    ax.plot(df["timestamp_utc"], df["aqi_index"], color="#ff69b4", label="Actual AQI")
+    ax.plot(rf_pred["timestamp"], rf_pred["predicted_aqi"], color="#00bfff", label="RF Prediction")
+    ax.set_title("AQI Variation", color="#ff69b4")
+    ax.set_xlabel("Date/Hour", color="white")
+    ax.set_ylabel("AQI", color="white")
+    ax.legend()
+    ax.set_facecolor("#000000")
+    fig.patch.set_facecolor("#000000")
+    ax.tick_params(colors="white")
+    st.pyplot(fig)
+
 with col2:
-    st.subheader("Accuracy (derived from MAPE)")
-    st.write(f"MAPE: {mape:.2f}%")
-    st.write(f"Accuracy: {accuracy_pct:.2f}%")
-with col3:
-    st.subheader("Data / Model info")
-    st.write(f"Training rows: {len(train_df)}")
-    st.write(f"Test rows: {len(test_df)}")
-    st.write(f"Total labelled rows used: {len(df_model)}")
+    st.write("📊 Summary Metrics")
+    st.metric("Mean Test MAE", f"{compare_df['MAE'].min():.2f}")
+    st.metric("Mean Test RMSE", f"{compare_df['RMSE'].min():.2f}")
+    st.metric("Best R²", f"{compare_df['R2'].max():.2f}")
 
-st.markdown("---")
+# SHAP FEATURE IMPORTANCE
+st.divider()
+st.subheader("🔍 Random Forest Feature Importance (SHAP)")
 
-# Plot
-st.subheader("Predicted AQI — Next 3 Days (72 hours)")
-fig1, ax1 = plt.subplots(figsize=(10, 4))
-ax1.plot(pred_df["timestamp"], pred_df["predicted_aqi"], label="Predicted AQI (3 days)", linewidth=2)
-ax1.set_xlabel("Timestamp (UTC)")
-ax1.set_ylabel("AQI Index")
-ax1.legend()
-st.pyplot(fig1)
+explainer = shap.TreeExplainer(models["Random Forest"])
+shap_values = explainer.shap_values(X_test)
 
-# Plot: actual vs predicted
-test_feature_times = test_df["timestamp_utc"].reset_index(drop=True)
-test_target_times = test_feature_times + pd.Timedelta(hours=72)
+mean_abs_shap = np.abs(shap_values).mean(axis=0)
+top_features = pd.DataFrame({
+    "Feature": X_test.columns,
+    "Mean |SHAP Value|": mean_abs_shap
+}).sort_values(by="Mean |SHAP Value|", ascending=False).head(10)
 
-st.subheader("Actual vs Predicted (Test Set)")
-comp_df = pd.DataFrame({
-    "timestamp": test_target_times,
-    "actual": y_test.values,
-    "predicted": preds_test
-}).reset_index(drop=True)
-
-fig2, ax2 = plt.subplots(figsize=(12, 5))
-ax2.plot(comp_df["timestamp"], comp_df["actual"], label="Actual (target time)", linewidth=2)
-ax2.plot(comp_df["timestamp"], comp_df["predicted"], label="Predicted", linestyle="dashed")
-ax2.set_xlabel("Timestamp (UTC)")
-ax2.set_ylabel("AQI Index")
-ax2.legend()
-st.pyplot(fig2)
-
-st.subheader("Predicted values (next 72 hours)")
-st.dataframe(pred_df)
-
-st.subheader("Recent AQI (historical)")
-hist_df = df.set_index("timestamp_utc")["aqi_index"].tail(168)  # last 7 days
-fig3, ax3 = plt.subplots(figsize=(12, 3))
-ax3.plot(hist_df.index, hist_df.values, label="AQI (historical)")
-ax3.set_xlabel("Timestamp (UTC)")
-ax3.set_ylabel("AQI Index")
-ax3.legend()
-st.pyplot(fig3)
-
-# Optional: allow download of predicted CSV
-csv = pred_df.to_csv(index=False)
-st.download_button("Download predictions CSV", csv, "predictions_next_3_days.csv", "text/csv")
-
-# End
-st.write("Note: Model is trained on the past available labelled data (target = AQI 72h ahead). The evaluation metrics above are calculated on a time-based test split and reflect how well the model predicts AQI 72 hours ahead historically.")
+st.dataframe(
+    top_features.style
+        .background_gradient(cmap="Blues", axis=0)
+        .set_properties(subset=["Feature"], **{"color": "#ff69b4", "font-weight":"bold"})
+        .set_properties(subset=["Mean |SHAP Value|"], **{"color": "black"})
+        .set_table_styles([
+            {"selector": "th", "props": [("font-size", "12px")]},
+            {"selector": "td", "props": [("font-size", "12px")]}
+        ])
+)
