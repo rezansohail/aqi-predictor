@@ -1,0 +1,7 @@
+streamlit
+hopsworks==4.2.*
+joblib
+pandas
+numpy
+matplotlib
+scikit-learn
